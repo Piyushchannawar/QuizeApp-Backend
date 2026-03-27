@@ -20,20 +20,43 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Quiz Platform API" });
 });
 
+let isConnected = false;
+
+async function connectToMongoDB() {
+  try {
+    await mongoose.connect(MONGO_URI,{
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    isConnected = true;
+    console.log("MongoDB connected");
+  } catch (error) {
+    console.error("MongoDB connection error", error);
+  }
+}
+
+app.use((req, res, next) => {
+  if(!isConnected) {
+    connectToMongoDB();
+  }
+  next();
+});
+
 app.use("/api/admin/auth", authRoutes);
 app.use("/api/admin/quizzes", adminQuizRoutes);
 app.use("/api/quizzes", studentQuizRoutes);
 
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    console.log("MongoDB connected");
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error("MongoDB connection error", err);
-    process.exit(1);
-  });
+// mongoose
+//   .connect(MONGO_URI)
+//   .then(() => {
+//     console.log("MongoDB connected");
+//     app.listen(PORT, () => {
+//       console.log(`Server running on port ${PORT}`);
+//     });
+//   })
+//   .catch((err) => {
+//     console.error("MongoDB connection error", err);
+//     process.exit(1);
+//   });
 
+module.exports = app;
