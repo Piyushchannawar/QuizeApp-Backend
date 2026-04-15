@@ -15,6 +15,24 @@ function generateCode() {
   return code;
 }
 
+function compareRollNumbers(a = "", b = "") {
+  const left = String(a || "").trim();
+  const right = String(b || "").trim();
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function csvCell(value) {
+  const safeValue = value == null ? "" : String(value);
+  return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+function getRollNumber(submission) {
+  return submission?.rollNumber || submission?.rollNo || "";
+}
+
 // Create quiz (DRAFT)
 router.post("/", requireAdmin, async (req, res) => {
   const { title, description, questions } = req.body;
@@ -128,6 +146,43 @@ router.get("/:id", requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to fetch quiz" });
+  }
+});
+
+// Export quiz submissions in Excel-compatible CSV sorted by roll no (ascending)
+router.get("/:id/submissions/export", requireAdmin, async (req, res) => {
+  try {
+    const quiz = await Quiz.findById(req.params.id);
+    if (!quiz) return res.status(404).json({ message: "Quiz not found" });
+    if (quiz.createdBy.toString() !== req.adminId) {
+      return res.status(403).json({ message: "Not allowed" });
+    }
+
+    const submissions = await Submission.find({ quiz: quiz._id }).lean();
+    submissions.sort((a, b) => compareRollNumbers(getRollNumber(a), getRollNumber(b)));
+
+    const header = ["Roll No", "Username", "Score", "Max Score", "Submitted At"];
+    const rows = submissions.map((s) => [
+      getRollNumber(s),
+      s.username || "",
+      s.score ?? "",
+      s.maxScore ?? "",
+      s.createdAt ? new Date(s.createdAt).toISOString() : ""
+    ]);
+
+    const csvContent = [header, ...rows]
+      .map((row) => row.map((cell) => csvCell(cell)).join(","))
+      .join("\n");
+
+    const safeTitle = (quiz.title || "quiz-results").replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
+    const fileName = `${safeTitle}-${quiz.code}-results.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    res.status(200).send(csvContent);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Failed to export submissions" });
   }
 });
 

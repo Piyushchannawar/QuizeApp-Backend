@@ -3,7 +3,8 @@ import mongoose from "mongoose";
 const answerSchema = new mongoose.Schema(
   {
     questionId: { type: mongoose.Schema.Types.ObjectId, required: true },
-    selectedIndex: { type: Number, required: true }
+    selectedIndex: { type: Number, default: null },
+    selectedIndexes: { type: [Number], default: [] }
   },
   { _id: false }
 );
@@ -11,6 +12,7 @@ const answerSchema = new mongoose.Schema(
 const submissionSchema = new mongoose.Schema(
   {
     quiz: { type: mongoose.Schema.Types.ObjectId, ref: "Quiz", required: true },
+    rollNumber: { type: String, required: true },
     username: { type: String, required: true },
     answers: [answerSchema],
     score: { type: Number, required: true },
