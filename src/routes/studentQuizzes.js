@@ -64,8 +64,13 @@ router.post("/:code/submissions", async (req, res) => {
     let score = 0;
     const maxScore = quiz.questions.length;
 
+    const normalizedAnswers = [];
+
     for (const ans of answers) {
-      const question = quiz.questions.id(ans.questionId);
+      const matchedQuestion = quiz.questions.find(
+        (question) => String(question?._id) === String(ans?.questionId || "")
+      );
+      const question = matchedQuestion || null;
       if (!question) continue;
 
       const correctIndexes = question.options
@@ -81,25 +86,27 @@ router.post("/:code/submissions", async (req, res) => {
       if (arraysEqualAsSet(submittedIndexes, correctIndexes)) {
         score += 1;
       }
+
+      normalizedAnswers.push({
+        questionId: question._id,
+        selectedIndex: Number.isInteger(ans.selectedIndex)
+          ? ans.selectedIndex
+          : Array.isArray(ans.selectedIndexes) && ans.selectedIndexes.length
+            ? ans.selectedIndexes[0]
+            : null,
+        selectedIndexes: Array.isArray(ans.selectedIndexes)
+          ? [...new Set(ans.selectedIndexes.filter((idx) => Number.isInteger(idx)))]
+          : Number.isInteger(ans.selectedIndex)
+            ? [ans.selectedIndex]
+            : []
+      });
     }
 
     const submission = await Submission.create({
       quiz: quiz._id,
       rollNumber: safeRollNumber,
       username: safeUsername,
-      answers: answers.map((a) => ({
-        questionId: a.questionId,
-        selectedIndex: Number.isInteger(a.selectedIndex)
-          ? a.selectedIndex
-          : Array.isArray(a.selectedIndexes) && a.selectedIndexes.length
-            ? a.selectedIndexes[0]
-            : null,
-        selectedIndexes: Array.isArray(a.selectedIndexes)
-          ? [...new Set(a.selectedIndexes.filter((idx) => Number.isInteger(idx)))]
-          : Number.isInteger(a.selectedIndex)
-            ? [a.selectedIndex]
-            : []
-      })),
+      answers: normalizedAnswers,
       score,
       maxScore,
       wasAutoSubmitted: !!meta?.wasAutoSubmitted,
