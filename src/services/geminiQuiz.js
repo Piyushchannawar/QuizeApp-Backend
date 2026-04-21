@@ -2,8 +2,10 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const MAX_CONTENT_CHARS = 48_000;
 const MIN_CONTENT_CHARS = 20;
+const MIN_CONTENT_WORDS = 12;
 const MIN_QUESTIONS = 1;
 const MAX_QUESTIONS = 50;
+const MAX_GENERATION_ATTEMPTS = 3;
 
 const DEFAULT_MODEL_CANDIDATES = [
   "gemini-2.5-flash",
@@ -21,7 +23,57 @@ function modelCandidates() {
   return DEFAULT_MODEL_CANDIDATES;
 }
 
-function normalizeQuizPayload(parsed, expectedCount) {
+function tokenize(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function sourceKeywordSet(source) {
+  const stopWords = new Set([
+    "the",
+    "is",
+    "are",
+    "a",
+    "an",
+    "of",
+    "to",
+    "in",
+    "on",
+    "and",
+    "or",
+    "for",
+    "with",
+    "by",
+    "as",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "be",
+    "was",
+    "were",
+    "from",
+    "at",
+    "which",
+    "what",
+    "how",
+    "when",
+    "why"
+  ]);
+  return new Set(tokenize(source).filter((word) => word.length >= 3 && !stopWords.has(word)));
+}
+
+function hasGroundingText(text, keywords) {
+  const words = tokenize(text);
+  return words.some((word) => keywords.has(word));
+}
+
+function normalizeQuizPayload(parsed, expectedCount, sourceContent) {
   if (!parsed || typeof parsed !== "object") {
     throw new Error("Invalid AI response shape");
   }
@@ -31,6 +83,7 @@ function normalizeQuizPayload(parsed, expectedCount) {
   }
 
   const out = [];
+  const keywords = sourceKeywordSet(sourceContent);
   for (const q of rawQs) {
     if (out.length >= expectedCount) break;
     const text = String(q?.text ?? "").trim();
@@ -59,6 +112,12 @@ function normalizeQuizPayload(parsed, expectedCount) {
       const firstNonEmpty = opts.findIndex((o) => o.text.length > 0);
       const idx = firstNonEmpty >= 0 ? firstNonEmpty : 0;
       opts[idx] = { ...opts[idx], isCorrect: true };
+    }
+
+    const groundedInQuestion = hasGroundingText(text, keywords);
+    const groundedInOptions = opts.some((o) => hasGroundingText(o.text, keywords));
+    if (!groundedInQuestion && !groundedInOptions) {
+      continue;
     }
 
     out.push({ text, options: opts });
@@ -100,6 +159,12 @@ export async function generateQuizFromContent({ content, numQuestions, titleHint
   if (trimmed.length < MIN_CONTENT_CHARS) {
     throw new Error(`Content must be at least ${MIN_CONTENT_CHARS} characters`);
   }
+  const sourceWords = tokenize(trimmed);
+  if (sourceWords.length < MIN_CONTENT_WORDS) {
+    throw new Error(
+      `Please provide richer source content (at least ${MIN_CONTENT_WORDS} words) so accurate questions can be generated.`
+    );
+  }
   if (trimmed.length > MAX_CONTENT_CHARS) {
     throw new Error(`Content must be at most ${MAX_CONTENT_CHARS} characters`);
   }
@@ -119,6 +184,8 @@ Requirements:
 - Each question has exactly 4 options; each option has non-empty text.
 - Each question must have at least one option with isCorrect: true (multiple true is allowed if appropriate).
 - Do not invent facts outside the source material; paraphrase and test understanding of the given content.
+- Avoid generic stems such as "according to the source material".
+- If the source does not contain enough detail, create simpler factual questions from only the available statements.
 - Return ONLY JSON (no markdown) matching this shape:
 {"title":"string","description":"string optional","questions":[{"text":"string","options":[{"text":"string","isCorrect":boolean}, ... 4 items]}]}
 
@@ -140,15 +207,23 @@ ${trimmed}
       }
     });
     try {
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-      let data;
-      try {
-        data = JSON.parse(text);
-      } catch {
-        throw new Error("AI returned invalid JSON");
+      for (let attempt = 1; attempt <= MAX_GENERATION_ATTEMPTS; attempt++) {
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error("AI returned invalid JSON");
+        }
+        try {
+          return normalizeQuizPayload(data, n, trimmed);
+        } catch (validationError) {
+          if (attempt === MAX_GENERATION_ATTEMPTS) {
+            throw validationError;
+          }
+        }
       }
-      return normalizeQuizPayload(data, n);
     } catch (err) {
       lastError = err;
       const moreFallbacks = i < candidates.length - 1;
